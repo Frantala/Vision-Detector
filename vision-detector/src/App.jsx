@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 
-const DETECTION_MIN_SCORE = 0.4;
+const DETECTION_MIN_SCORE = 0.55;
 
 function Icon({ name, size = 20 }) {
   const sharedProps = {
@@ -92,7 +92,7 @@ function App() {
           import('@tensorflow-models/coco-ssd'),
         ]);
         await tf.ready();
-        const loadedModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        const loadedModel = await cocoSsd.load({ base: 'mobilenet_v2' });
         if (cancelled) return;
         setModel(loadedModel);
         setModelStatus('ready');
@@ -137,8 +137,8 @@ function App() {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: 'user' },
-          width: { ideal: 640 },
-          height: { ideal: 480 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
         audio: false,
       });
