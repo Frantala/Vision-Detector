@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as tf from '@tensorflow/tfjs';
-import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import './App.css';
+
+const DETECTION_MIN_SCORE = 0.4;
 
 function Icon({ name, size = 20 }) {
   const sharedProps = {
@@ -87,8 +87,12 @@ function App() {
 
     async function loadModel() {
       try {
+        const [tf, cocoSsd] = await Promise.all([
+          import('@tensorflow/tfjs'),
+          import('@tensorflow-models/coco-ssd'),
+        ]);
         await tf.ready();
-        const loadedModel = await cocoSsd.load();
+        const loadedModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         if (cancelled) return;
         setModel(loadedModel);
         setModelStatus('ready');
@@ -207,7 +211,7 @@ function App() {
       if (!detecting) {
         detecting = true;
         try {
-          const predictions = await model.detect(video);
+          const predictions = await model.detect(video, 20, DETECTION_MIN_SCORE);
           if (!active) return;
 
           if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
@@ -415,7 +419,7 @@ function App() {
               <span className="model-icon"><Icon name="sparkles" size={17} /></span>
               <div>
                 <span className="model-title">COCO-SSD</span>
-                <span className="model-detail">Modelo de detección · 80 categorías</span>
+                <span className="model-detail">Lite MobileNetV2 · 80 categorías</span>
               </div>
               <span className={`model-status ${modelStatus === 'ready' ? 'is-ready' : ''}`}>
                 {modelStatus === 'ready' ? 'LISTO' : modelStatus === 'error' ? 'ERROR' : 'CARGANDO'}

@@ -2,6 +2,12 @@
 
 Aplicación web de visión por computadora que reconoce objetos en tiempo real usando React, TensorFlow.js y el modelo COCO-SSD. La inferencia se realiza en el navegador; el video de la cámara no se graba ni se envía a un servidor.
 
+## Modelo y detecciones
+
+Las dependencias de TensorFlow y del detector se cargan bajo demanda para que el JavaScript inicial de la interfaz sea más ligero. COCO-SSD usa su base rápida Lite MobileNetV2 y un umbral de confianza del 40 % para mostrar algunas detecciones menos seguras; esto puede aumentar los falsos positivos. La primera detección todavía depende de descargar los pesos del modelo. COCO-SSD reconoce hasta 80 categorías conocidas; no puede detectar de forma fiable objetos fuera de esas categorías ni sustituye un modelo entrenado con ejemplos propios.
+
+Teachable Machine es adecuado si quieres clasificar una escena u objeto entre tus propias clases, pero su modelo de imágenes no ofrece por sí solo recuadros para localizar varios objetos. Para localizar varios objetos personalizados se necesita entrenar un modelo de detección con imágenes etiquetadas con sus recuadros.
+
 ## Ejecutar localmente
 
 ```bash
