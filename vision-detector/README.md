@@ -1,12 +1,12 @@
-# VisionLab — Detector de objetos
+# VisionLab — Clasificador de imágenes
 
-Aplicación web de visión por computadora que reconoce objetos en tiempo real usando React, TensorFlow.js y el modelo COCO-SSD. La inferencia se realiza en el navegador; el video de la cámara no se graba ni se envía a un servidor.
+Aplicación web de visión por computadora que clasifica en tiempo real las imágenes de la cámara con un modelo exportado desde Teachable Machine. La inferencia se realiza en el navegador; el video no se graba ni se envía a un servidor.
 
-## Modelo y detecciones
+## Modelo personalizado
 
-Las dependencias de TensorFlow y del detector se cargan bajo demanda para que el JavaScript inicial de la interfaz sea más ligero. COCO-SSD usa su base rápida Lite MobileNetV2 y un umbral de confianza del 40 % para mostrar algunas detecciones menos seguras; esto puede aumentar los falsos positivos. La primera detección todavía depende de descargar los pesos del modelo. COCO-SSD reconoce hasta 80 categorías conocidas; no puede detectar de forma fiable objetos fuera de esas categorías ni sustituye un modelo entrenado con ejemplos propios.
+El modelo exportado está en `public/model/`: `model.json`, `weights.bin` y `metadata.json`. La aplicación lee las etiquetas y el tamaño de entrada desde los metadatos. TensorFlow.js ya es una dependencia del proyecto, así que no hace falta instalar otra biblioteca para cargar este formato.
 
-Teachable Machine es adecuado si quieres clasificar una escena u objeto entre tus propias clases, pero su modelo de imágenes no ofrece por sí solo recuadros para localizar varios objetos. Para localizar varios objetos personalizados se necesita entrenar un modelo de detección con imágenes etiquetadas con sus recuadros.
+Este es un clasificador de imagen, no un detector con recuadros: predice la clase más probable para el fotograma completo y no localiza varios objetos a la vez. Solo reconoce las clases con las que se entrenó. Para localizar objetos con recuadros hace falta exportar y conectar un modelo de detección distinto.
 
 ## Ejecutar localmente
 
@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-Abre la dirección local que muestra Vite y permite el acceso a la cámara cuando el navegador lo solicite. La primera carga del modelo requiere conexión a internet.
+Abre la dirección local que muestra Vite y permite el acceso a la cámara cuando el navegador lo solicite. El modelo se sirve desde `public/model/`; no requiere descargar pesos externos.
 
 ## Cámara y permisos
 

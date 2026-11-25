@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 
-const DETECTION_MIN_SCORE = 0.55;
+const CLASSIFICATION_MIN_SCORE = 0.55;
+const MODEL_IMAGE_SIZE = 224;
 
 function Icon({ name, size = 20 }) {
   const sharedProps = {
@@ -69,10 +70,10 @@ function Icon({ name, size = 20 }) {
 
 function App() {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const cameraRequestRef = useRef(0);
   const cameraRequestPendingRef = useRef(false);
+  const modelLoadPromiseRef = useRef(null);
   const lastDetectionsRef = useRef('');
   const [model, setModel] = useState(null);
   const [modelStatus, setModelStatus] = useState('loading');
@@ -86,25 +87,48 @@ function App() {
     let cancelled = false;
 
     async function loadModel() {
-      try {
-        const [tf, cocoSsd] = await Promise.all([
-          import('@tensorflow/tfjs'),
-          import('@tensorflow-models/coco-ssd'),
-        ]);
-        await tf.ready();
-        const loadedModel = await cocoSsd.load({ base: 'mobilenet_v2' });
+      const tf = await import('@tensorflow/tfjs');
+      await tf.ready();
+      const metadataResponse = await fetch(`${import.meta.env.BASE_URL}model/metadata.json`);
+      if (!metadataResponse.ok) {
+        throw new Error(`No se pudo cargar metadata.json (${metadataResponse.status}).`);
+      }
+      const metadata = await metadataResponse.json();
+      if (!Array.isArray(metadata.labels) || metadata.labels.length === 0) {
+        throw new Error('El modelo no contiene etiquetas de clases.');
+      }
+      if (!Number.isInteger(metadata.imageSize) || metadata.imageSize !== MODEL_IMAGE_SIZE) {
+        throw new Error(`El tamaño de imagen del modelo debe ser ${MODEL_IMAGE_SIZE}.`);
+      }
+
+      const classifier = await tf.loadLayersModel(`${import.meta.env.BASE_URL}model/model.json`);
+      const outputShape = classifier.outputs[0]?.shape;
+      if (outputShape?.[outputShape.length - 1] !== metadata.labels.length) {
+        classifier.dispose();
+        throw new Error('La cantidad de etiquetas no coincide con las salidas del modelo.');
+      }
+
+      return {
+        classifier,
+        imageSize: metadata.imageSize,
+        labels: metadata.labels,
+        tf,
+      };
+    }
+
+    modelLoadPromiseRef.current ??= loadModel();
+    modelLoadPromiseRef.current
+      .then((loadedModel) => {
         if (cancelled) return;
         setModel(loadedModel);
         setModelStatus('ready');
-      } catch (error) {
+      })
+      .catch((error) => {
         if (cancelled) return;
-        console.error('No se pudo cargar el modelo COCO-SSD:', error);
-        setModelError('No se pudo cargar el modelo. Comprueba tu conexión e inténtalo de nuevo.');
+        console.error('No se pudo cargar el modelo personalizado:', error);
+        setModelError('No se pudo cargar el modelo personalizado. Verifica los archivos en public/model.');
         setModelStatus('error');
-      }
-    }
-
-    loadModel();
+      });
     return () => {
       cancelled = true;
     };
@@ -202,8 +226,7 @@ function App() {
       if (!active) return;
 
       const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
         frameId = requestAnimationFrame(detectFrame);
         return;
       }
@@ -211,39 +234,29 @@ function App() {
       if (!detecting) {
         detecting = true;
         try {
-          const predictions = await model.detect(video, 20, DETECTION_MIN_SCORE);
+          const predictionTensor = model.tf.tidy(() => {
+            const pixels = model.tf.browser.fromPixels(video);
+            const resized = model.tf.image.resizeBilinear(pixels, [model.imageSize, model.imageSize]);
+            const normalized = resized.toFloat().div(127.5).sub(1);
+            const prediction = model.classifier.predict(normalized.expandDims(0));
+            if (Array.isArray(prediction)) {
+              throw new Error('El modelo debe producir una única salida de clasificación.');
+            }
+            return prediction;
+          });
+          let scores;
+          try {
+            scores = await predictionTensor.data();
+          } finally {
+            predictionTensor.dispose();
+          }
           if (!active) return;
 
-          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-          }
-
-          const context = canvas.getContext('2d');
-          if (!context) throw new Error('No se pudo preparar el visor de detección.');
-          context.clearRect(0, 0, canvas.width, canvas.height);
-          context.font = '600 14px Inter, sans-serif';
-          context.textBaseline = 'top';
-
-          const currentItems = predictions.map((prediction) => ({
-            label: prediction.class,
-            score: Math.round(prediction.score * 100),
-          }));
-
-          predictions.forEach((prediction) => {
-            const [x, y, width, height] = prediction.bbox;
-            const label = `${prediction.class}  ${Math.round(prediction.score * 100)}%`;
-            const labelWidth = context.measureText(label).width + 16;
-            const labelY = Math.max(0, y - 28);
-
-            context.strokeStyle = '#53e3b2';
-            context.lineWidth = Math.max(2, canvas.width / 400);
-            context.strokeRect(x, y, width, height);
-            context.fillStyle = '#53e3b2';
-            context.fillRect(x, labelY, labelWidth, 26);
-            context.fillStyle = '#10231f';
-            context.fillText(label, x + 8, labelY + 5);
-          });
+          const topScore = Math.max(...scores);
+          const topIndex = scores.indexOf(topScore);
+          const currentItems = topScore >= CLASSIFICATION_MIN_SCORE
+            ? [{ label: model.labels[topIndex], score: Math.round(topScore * 100) }]
+            : [];
 
           const serializedItems = JSON.stringify(currentItems);
           if (serializedItems !== lastDetectionsRef.current) {
@@ -252,8 +265,8 @@ function App() {
           }
           setDetectionError('');
         } catch (error) {
-          console.error('Falló la detección de objetos:', error);
-          setDetectionError('Ocurrió un error durante la detección. Recarga la página para reiniciar.');
+          console.error('Falló la clasificación de la imagen:', error);
+          setDetectionError('Ocurrió un error durante la clasificación. Recarga la página para reiniciar.');
           active = false;
         } finally {
           detecting = false;
@@ -271,7 +284,7 @@ function App() {
   }, [model, cameraStatus]);
 
   const isLive = cameraStatus === 'active' && modelStatus === 'ready';
-  const uniqueObjects = new Set(detectedItems.map((item) => item.label)).size;
+  const classCount = model?.labels.length ?? 0;
 
   return (
     <main className="app-shell">
@@ -297,7 +310,7 @@ function App() {
             <p className="eyebrow"><span /> INTELIGENCIA ARTIFICIAL EN EL NAVEGADOR</p>
             <h1>Las cosas que te rodean,<br /><span>ahora tienen nombre.</span></h1>
             <p className="intro-description">
-              Detección de objetos en tiempo real con visión por computadora.
+              Clasificación de imágenes en tiempo real con tu modelo personalizado.
               Privado por diseño: el análisis ocurre directamente en tu dispositivo.
             </p>
           </div>
@@ -307,7 +320,7 @@ function App() {
           </div>
         </section>
 
-        <section className="dashboard" aria-label="Detector de objetos">
+        <section className="dashboard" aria-label="Clasificador de imágenes">
           <div className="camera-card">
             <div className="card-heading">
               <div>
@@ -322,7 +335,11 @@ function App() {
 
             <div className="camera-viewport">
               <video ref={videoRef} autoPlay muted playsInline aria-label="Vista en directo de la cámara" />
-              <canvas ref={canvasRef} aria-hidden="true" />
+              {cameraStatus === 'active' && detectedItems[0] && (
+                <div className="classification-overlay">
+                  {detectedItems[0].label} · {detectedItems[0].score}%
+                </div>
+              )}
               {cameraStatus !== 'active' && (
                 <div className="camera-placeholder">
                   <div className="placeholder-icon"><Icon name="camera" size={26} /></div>
@@ -341,11 +358,11 @@ function App() {
                 </div>
               )}
               {cameraStatus === 'active' && modelStatus === 'loading' && (
-                <div className="model-loading"><span className="loading-spinner" /> Cargando el modelo de detección…</div>
+                <div className="model-loading"><span className="loading-spinner" /> Cargando tu modelo…</div>
               )}
               <div className="viewport-caption">
-                <span><span className="legend-dot" /> COCO-SSD</span>
-                <span>640 × 480 · REAL-TIME</span>
+                <span><span className="legend-dot" /> CLASIFICADOR PERSONALIZADO</span>
+                <span>224 × 224 · REAL-TIME</span>
               </div>
             </div>
 
@@ -376,29 +393,29 @@ function App() {
               <div className="stat-card">
                 <span className="stat-icon mint"><Icon name="box" size={18} /></span>
                 <span className="stat-value">{detectedItems.length.toString().padStart(2, '0')}</span>
-                <span className="stat-label">DETECCIONES</span>
+                <span className="stat-label">CLASE PREDICHA</span>
               </div>
               <div className="stat-card">
                 <span className="stat-icon lavender"><Icon name="sparkles" size={18} /></span>
-                <span className="stat-value">{uniqueObjects.toString().padStart(2, '0')}</span>
-                <span className="stat-label">TIPOS DE OBJETO</span>
+                <span className="stat-value">{classCount.toString().padStart(2, '0')}</span>
+                <span className="stat-label">CLASES ENTRENADAS</span>
               </div>
             </div>
 
             <div className="detections-card">
               <div className="detections-heading">
-                <span>Objetos reconocidos</span>
+                <span>Clase más probable</span>
                 <span className="count-badge">{detectedItems.length}</span>
               </div>
               {modelStatus === 'loading' && (
-                <div className="empty-state"><span className="loading-spinner" />Preparando el modelo de IA…</div>
+                <div className="empty-state"><span className="loading-spinner" />Preparando tu modelo…</div>
               )}
               {modelStatus === 'error' && <p className="inline-error" role="alert">{modelError}</p>}
               {modelStatus === 'ready' && detectedItems.length === 0 && (
                 <div className="empty-state">
                   <span className="empty-symbol"><Icon name="sparkles" size={21} /></span>
-                  <strong>Todo listo para observar</strong>
-                  <span>Los objetos aparecerán aquí en cuanto estén frente a la cámara.</span>
+                  <strong>Listo para clasificar</strong>
+                  <span>Muestra uno de los objetos entrenados frente a la cámara.</span>
                 </div>
               )}
               {detectedItems.length > 0 && (
@@ -418,8 +435,8 @@ function App() {
             <div className="model-card">
               <span className="model-icon"><Icon name="sparkles" size={17} /></span>
               <div>
-                <span className="model-title">COCO-SSD</span>
-                <span className="model-detail">Lite MobileNetV2 · 80 categorías</span>
+                <span className="model-title">TEACHABLE MACHINE</span>
+                <span className="model-detail">{classCount} clases · modelo local</span>
               </div>
               <span className={`model-status ${modelStatus === 'ready' ? 'is-ready' : ''}`}>
                 {modelStatus === 'ready' ? 'LISTO' : modelStatus === 'error' ? 'ERROR' : 'CARGANDO'}
